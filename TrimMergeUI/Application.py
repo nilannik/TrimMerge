@@ -9,7 +9,7 @@ from gi.repository import GLib, Gio, Gtk
 
 from TrimMergeUI.MainWindow import MainWindow
 from TrimMergeUI.AboutWindow import AboutWindow, _version
-from TrimMergeUI.PreferencesDialog import PreferencesDialog
+#from TrimMergeUI.PreferencesDialog import PreferencesDialog
 
 
 class TrimMergeApplication(Gtk.Application):
@@ -59,6 +59,7 @@ class TrimMergeApplication(Gtk.Application):
     def on_preferences(self, action, param):
         print('Coming soon')
         return
+        '''
         preferences_dialog = PreferencesDialog(self.window, config_file_name=self.config_file_name)
         preferences_dialog.present()
         response = preferences_dialog.run()
@@ -67,6 +68,7 @@ class TrimMergeApplication(Gtk.Application):
         elif response == Gtk.ResponseType.CANCEL:
             print("The Cancel button was clicked")
             preferences_dialog.destroy()
+        '''
 
     def on_quit(self, action, param):
         print('Doing cleanup!')
