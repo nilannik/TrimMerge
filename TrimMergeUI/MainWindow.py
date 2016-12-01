@@ -29,7 +29,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.tabbed_view = TabbedView()
         self.add(self.tabbed_view)
         self.set_default_icon_name('applications-utilities')
-        self.show_all()
+        self.tabbed_view.show()
 
     def on_maximize_toggle(self, action, value):
         action.set_state(value)

@@ -1,2 +1,2 @@
 gi
-Bio
+biopython
