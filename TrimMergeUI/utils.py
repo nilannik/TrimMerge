@@ -89,17 +89,17 @@ def clean_records(record_FR, record_RF, adapters_dict, min_length, similarity, s
         clean = True
         short = False
     elif len(positions_FR) != len(positions_RF):
-        print('\n\n*** Suspicious ***')
-        print(positions_FR, positions_RF)
-        print('*** Suspicious ***\n\n')
+        #print('\n\n*** Suspicious ***')
+        #print(positions_FR, positions_RF)
+        #print('*** Suspicious ***\n\n')
         clean = False
         short = False
     elif len(record_FR.seq) < short_read_threshold:
         clean = False
         short = True
-        print('Short Sequence found: %d' % len(record_FR.seq))
-        print('FR:', record_FR.seq)
-        print('RF:', record_RF.seq)
+        #print('Short Sequence found: %d' % len(record_FR.seq))
+        #print('FR:', record_FR.seq)
+        #print('RF:', record_RF.seq)
     else:
         clean = True
         short = False

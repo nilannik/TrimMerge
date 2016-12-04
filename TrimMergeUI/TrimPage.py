@@ -16,7 +16,9 @@ import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
 
-from TrimMergeUI.utils import clean_records
+from TrimMergeUI.Worker import count_length, compare_reads, init_worker, clean_reads
+
+from multiprocessing import Pool
 
 
 class TrimPage(Gtk.Box):
@@ -38,10 +40,10 @@ class TrimPage(Gtk.Box):
         statistics_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         hbox.pack_start(statistics_box, True, True, 0)
         stat_title = Gtk.Label()
-        stat_title.set_markup('<big><b>Input reads statistics</b></big>')
+        stat_title.set_markup('_'*50 + '\n<big><b>Input reads statistics</b></big>')
         statistics_box.pack_start(stat_title, False, False, 0)
         input_stat_grid = Gtk.Grid(column_spacing=10, row_spacing=10)
-        statistics_box.pack_start(input_stat_grid, False, False, 0)
+        statistics_box.pack_start(input_stat_grid, True, True, 0)
         self.total_number_of_reads = Gtk.Label('n/a')
         self.total_length_of_reads = Gtk.Label('n/a')
         input_stat_grid.attach(Gtk.Label('Reads count'), 0, 0, 1, 1)
@@ -49,7 +51,7 @@ class TrimPage(Gtk.Box):
         input_stat_grid.attach(Gtk.Label('Total length'), 0, 1, 1, 1)
         input_stat_grid.attach(self.total_length_of_reads, 1, 1, 1, 1)
         stat_title = Gtk.Label()
-        stat_title.set_markup('<big><b>Output reads statistics</b></big>')
+        stat_title.set_markup('_'*50 + '\n<big><b>Output reads statistics</b></big>')
         statistics_box.pack_start(stat_title, False, False, 0)
         output_stat_grid = Gtk.Grid(column_spacing=10, row_spacing=10)
         statistics_box.pack_start(output_stat_grid, True, True, 0)
@@ -143,6 +145,9 @@ class TrimPage(Gtk.Box):
 
         grid.attach(Gtk.Label('Select alphabet:'), 0, 3, 1, 1)
         grid.attach(self.alphabet_combo, 1, 3, 1, 1)
+
+        self.file_format = None
+        self.alphabet = None
 
         grid.attach(self.select_out_dir_button, 0, 4, 1, 1)
         grid.attach(self.output_dir_label, 1, 4, 1, 1)
@@ -283,66 +288,26 @@ class TrimPage(Gtk.Box):
 
     def prepare_to_run(self):
         self.status_label.set_text('Starting...')
-        file_format = self.file_format_combo.get_active_text()
-        alphabet = self.alphabet_combo.get_active_text()
-        if alphabet == "Ambiguous DNA":
-            alphabet = IUPAC.ambiguous_dna
-        elif alphabet == "Unambiguous DNA":
-            alphabet = IUPAC.unambiguous_dna
-        elif alphabet == "Extended DNA":
-            alphabet = IUPAC.extended_dna
-        self.status_label.set_text('Reading in sequences...')
-        records_FR = SeqIO.parse(self.fr_file_name, file_format, alphabet=alphabet)
-        records_RF = SeqIO.parse(self.rf_file_name, file_format, alphabet=alphabet)
-        max_count_fr = 0
-        max_count_rf = 0
-        len_fr = 0
-        len_rf = 0
-        for record in records_FR:
-            while Gtk.events_pending():
-                Gtk.main_iteration()
-            max_count_fr += 1
-            len_fr += len(record.seq)
-        for record in records_RF:
-            while Gtk.events_pending():
-                Gtk.main_iteration()
-            max_count_rf += 1
-            len_rf += len(record.seq)
-        if max_count_fr != max_count_rf:
-            dialog = Gtk.MessageDialog(self.get_toplevel(), 0, Gtk.MessageType.ERROR,
-                                       Gtk.ButtonsType.CANCEL, "Different length of FR and RF files")
-            dialog.format_secondary_text(
-                "Number of forward and reverse reads must match")
-            dialog.run()
-            dialog.destroy()
+        self.file_format = self.file_format_combo.get_active_text()
+        self.alphabet = self.alphabet_combo.get_active_text()
+        if self.alphabet == "Ambiguous DNA":
+            self.alphabet = IUPAC.ambiguous_dna
+        elif self.alphabet == "Unambiguous DNA":
+            self.alphabet = IUPAC.unambiguous_dna
+        elif self.alphabet == "Extended DNA":
+            self.alphabet = IUPAC.extended_dna
+
+        response, max_count = self.count_records()
+        if not response:
             self.run_button.set_active(False)
             return
-        records_FR = SeqIO.parse(self.fr_file_name, file_format, alphabet=alphabet)
-        records_RF = SeqIO.parse(self.rf_file_name, file_format, alphabet=alphabet)
-        count = 0
-        for record_FR, record_RF in zip(records_FR, records_RF):
-            while Gtk.events_pending():
-                Gtk.main_iteration()
-            if record_FR.id != record_RF.id:
-                dialog = Gtk.MessageDialog(self.get_toplevel(), 0, Gtk.MessageType.ERROR,
-                                           Gtk.ButtonsType.CANCEL, "IDs of FR and RF sequences do not match")
-                dialog.format_secondary_text(
-                    "Sequence: %d\n" % (count + 1) +
-                    "FR id: %s\n" % record_FR.id +
-                    "RF id: %s\n" % record_RF.id)
-                dialog.run()
-                dialog.destroy()
-                self.run_button.set_active(False)
-                return
-            count += 1
-        self.total_number_of_reads.set_text('%d' % max_count_fr)
-        self.total_length_of_reads_count = len_fr + len_rf
-        self.total_length_of_reads.set_text('%g' % self.total_length_of_reads_count)
-        self.status_label.set_text('Scanning for adapters...')
-        records_FR = SeqIO.parse(self.fr_file_name, file_format, alphabet=alphabet)
-        records_RF = SeqIO.parse(self.rf_file_name, file_format, alphabet=alphabet)
-        clean_FR, clean_RF, bad_FR, bad_RF, short_FR, short_RF = self.clean_PE_reads(records_FR, records_RF,
-                                                                                     max_count_fr)
+
+        response = self.compare_records()
+        if not response:
+            self.run_button.set_active(False)
+            return
+
+        clean_FR, clean_RF, bad_FR, bad_RF, short_FR, short_RF = self.clean_PE_reads(max_count)
 
         fr_base_name, fr_extension = splitext(basename(self.fr_file_name))
         rf_base_name, rf_extension = splitext(basename(self.rf_file_name))
@@ -354,16 +319,101 @@ class TrimPage(Gtk.Box):
         file_out_RF_bad = join(self.output_dir_name, rf_base_name + '_suspicious' + fr_extension)
         file_out_RF_short = join(self.output_dir_name, rf_base_name + '_short' + fr_extension)
 
-        SeqIO.write(clean_FR, file_out_FR_clean, file_format)
-        SeqIO.write(clean_RF, file_out_RF_clean, file_format)
-        SeqIO.write(bad_FR, file_out_FR_bad, file_format)
-        SeqIO.write(bad_RF, file_out_RF_bad, file_format)
-        SeqIO.write(short_FR, file_out_FR_short, file_format)
-        SeqIO.write(short_RF, file_out_RF_short, file_format)
+        SeqIO.write(clean_FR, file_out_FR_clean, self.file_format)
+        SeqIO.write(clean_RF, file_out_RF_clean, self.file_format)
+        SeqIO.write(bad_FR, file_out_FR_bad, self.file_format)
+        SeqIO.write(bad_RF, file_out_RF_bad, self.file_format)
+        SeqIO.write(short_FR, file_out_FR_short, self.file_format)
+        SeqIO.write(short_RF, file_out_RF_short, self.file_format)
 
         self.run_button.set_active(False)
 
-    def clean_PE_reads(self, records_FR, records_RF, max_count=1e10):
+    def count_records(self):
+        self.status_label.set_text('Reading in sequences...')
+        records_FR = SeqIO.parse(self.fr_file_name, self.file_format, alphabet=self.alphabet)
+        records_RF = SeqIO.parse(self.rf_file_name, self.file_format, alphabet=self.alphabet)
+
+        pool = Pool()
+        len_fr_iter = pool.imap(count_length, records_FR, chunksize=100)
+        len_rf_iter = pool.imap(count_length, records_RF, chunksize=100)
+        fr_done = False
+        rf_done = False
+        max_count_fr = 0
+        max_count_rf = 0
+        len_fr = 0
+        len_rf = 0
+        while not (fr_done and rf_done):
+            while Gtk.events_pending():
+                Gtk.main_iteration()
+            try:
+                len_fr += next(len_fr_iter)
+                max_count_fr +=1
+            except StopIteration:
+                fr_done = True
+                pass
+            try:
+                len_rf += next(len_rf_iter)
+                max_count_rf +=1
+            except StopIteration:
+                rf_done = True
+                pass
+            self.total_number_of_reads.set_text('%d' % max_count_fr)
+            self.total_length_of_reads_count = len_fr + len_rf
+            self.total_length_of_reads.set_text('%g' % self.total_length_of_reads_count)
+        if max_count_fr != max_count_rf:
+            dialog = Gtk.MessageDialog(self.get_toplevel(), 0, Gtk.MessageType.ERROR,
+                                       Gtk.ButtonsType.CANCEL, "Different length of FR and RF files")
+            dialog.format_secondary_text(
+                "Number of forward and reverse reads must match")
+            dialog.run()
+            dialog.destroy()
+            result = False, 0
+        result = True
+        self.status_label = Gtk.Label('Idle')
+        return result, max_count_fr
+
+    def compare_records(self):
+        self.status_label.set_text('Checking sequences...')
+        records_FR = SeqIO.parse(self.fr_file_name, self.file_format, alphabet=self.alphabet)
+        records_RF = SeqIO.parse(self.rf_file_name, self.file_format, alphabet=self.alphabet)
+
+        pool = Pool()
+        len_fr_iter = pool.imap(compare_reads, zip(records_FR, records_RF), chunksize=100)
+        cmp_done = False
+        result = True
+        while not cmp_done:
+            while Gtk.events_pending():
+                Gtk.main_iteration()
+            try:
+                result = next(len_fr_iter)
+                if not result:
+                    pool.terminate()
+                    break
+            except StopIteration:
+                cmp_done = True
+                pass
+
+        if not result:
+            dialog = Gtk.MessageDialog(self.get_toplevel(), 0, Gtk.MessageType.ERROR,
+                                       Gtk.ButtonsType.CANCEL, "Different IDs in FR and RF files")
+            dialog.format_secondary_text(
+                "IDs of PE reads must match")
+            dialog.run()
+            dialog.destroy()
+        self.status_label = Gtk.Label('Idle')
+        return result
+
+    def clean_PE_reads(self, max_count=1e10):
+        self.status_label.set_text('Scanning for adapters...')
+        records_FR = SeqIO.parse(self.fr_file_name, self.file_format, alphabet=self.alphabet)
+        records_RF = SeqIO.parse(self.rf_file_name, self.file_format, alphabet=self.alphabet)
+        short_read_threshold = self.adapter_min_length
+
+        pool = Pool(initializer=init_worker, initargs=(self.adapters_dict, self.adapter_min_length,
+                                                       self.adapter_similarity,
+                                                       short_read_threshold))
+        results = pool.imap(clean_reads, zip(records_FR, records_RF), chunksize=1000)
+
         clean_FR = []
         clean_RF = []
 
@@ -374,7 +424,6 @@ class TrimPage(Gtk.Box):
         short_RF = []
 
         count = 0
-        short_read_threshold = self.adapter_min_length
         count_good = 0
         good_fr_len = 0
         good_rf_len = 0
@@ -386,52 +435,55 @@ class TrimPage(Gtk.Box):
         max_adapters_per_read_rf = 0
         max_similarity_fr = 0
         max_similarity_rf = 0
-        for record_FR, record_RF in zip(records_FR, records_RF):
-            count += 1
-            #if count > 10:
-            #    break
+
+        working = True
+
+        while working:
             if not self.run:
+                pool.terminate()
                 break
-            self.progressbar.set_fraction(count / max_count)
             while Gtk.events_pending():
                 Gtk.main_iteration()
+            try:
+                clean_FR_rec, clean_RF_rec, bad_FR_rec, bad_RF_rec, \
+                short_FR_rec, short_RF_rec, adapters_count, max_sim = next(results)
+                count += 1
+                self.progressbar.set_fraction(count / max_count)
 
-            clean_FR_rec, clean_RF_rec, bad_FR_rec, bad_RF_rec,\
-                short_FR_rec, short_RF_rec, adapters_count, max_sim = clean_records(record_FR, record_RF,
-                                                                                    self.adapters_dict,
-                                                                                    self.adapter_min_length,
-                                                                                    self.adapter_similarity,
-                                                                                    short_read_threshold)
-            count_adapters_fr += adapters_count[0]
-            count_adapters_rf += adapters_count[1]
-            self.total_number_of_reads_with_adapters.set_text('%2.5g / %2.5g' % (count_adapters_fr, count_adapters_rf))
-            if adapters_count[0] > max_adapters_per_read_fr:
-                max_adapters_per_read_fr = adapters_count[0]
-            if adapters_count[1] > max_adapters_per_read_rf:
-                max_adapters_per_read_rf = adapters_count[1]
-            self.max_number_of_adapters.set_text('%d, %d' % (max_adapters_per_read_fr, max_adapters_per_read_rf))
-            if clean_FR_rec:
-                clean_FR.append(clean_FR_rec)
-                count_good += 1
-                self.total_number_of_reads_out.set_text('%d (%2.2f %%)' % (count_good, count_good / count * 100))
-                good_fr_len += len(clean_FR_rec.seq)
-            if clean_RF_rec:
-                clean_RF.append(clean_RF_rec)
-                good_rf_len += len(clean_RF_rec.seq)
-                good_total_len = good_fr_len + good_rf_len
-                self.total_length_of_reads_out.set_text('%2.5g (%2.2f %%)' % (good_total_len,
-                                                        good_total_len / self.total_length_of_reads_count * 100))
-            if bad_FR_rec:
-                count_bad += 1
-                self.total_number_of_suspicious.set_text('%d (%2.2f %%)' % (count_bad, count_bad / count * 100))
-                bad_FR.append(bad_FR_rec)
-            if bad_RF_rec:
-                bad_RF.append(bad_RF_rec)
-            if short_FR_rec:
-                count_short += 1
-                self.total_number_of_short.set_text('%d (%2.2f %%)' % (count_short, count_short / count * 100))
-                short_FR.append(short_FR_rec)
-            if short_RF_rec:
-                short_RF.append(short_RF_rec)
+                count_adapters_fr += adapters_count[0]
+                count_adapters_rf += adapters_count[1]
+                self.total_number_of_reads_with_adapters.set_text(
+                    '%2.5g / %2.5g' % (count_adapters_fr, count_adapters_rf))
+                if adapters_count[0] > max_adapters_per_read_fr:
+                    max_adapters_per_read_fr = adapters_count[0]
+                if adapters_count[1] > max_adapters_per_read_rf:
+                    max_adapters_per_read_rf = adapters_count[1]
+                self.max_number_of_adapters.set_text('%d, %d' % (max_adapters_per_read_fr, max_adapters_per_read_rf))
+                if clean_FR_rec:
+                    clean_FR.append(clean_FR_rec)
+                    count_good += 1
+                    self.total_number_of_reads_out.set_text('%d (%2.2f %%)' % (count_good, count_good / count * 100))
+                    good_fr_len += len(clean_FR_rec.seq)
+                if clean_RF_rec:
+                    clean_RF.append(clean_RF_rec)
+                    good_rf_len += len(clean_RF_rec.seq)
+                    good_total_len = good_fr_len + good_rf_len
+                    self.total_length_of_reads_out.set_text('%2.5g (%2.2f %%)' % (good_total_len,
+                                                                                  good_total_len / self.total_length_of_reads_count * 100))
+                if bad_FR_rec:
+                    count_bad += 1
+                    self.total_number_of_suspicious.set_text('%d (%2.2f %%)' % (count_bad, count_bad / count * 100))
+                    bad_FR.append(bad_FR_rec)
+                if bad_RF_rec:
+                    bad_RF.append(bad_RF_rec)
+                if short_FR_rec:
+                    count_short += 1
+                    self.total_number_of_short.set_text('%d (%2.2f %%)' % (count_short, count_short / count * 100))
+                    short_FR.append(short_FR_rec)
+                if short_RF_rec:
+                    short_RF.append(short_RF_rec)
+            except StopIteration:
+                working = False
+                pass
 
         return clean_FR, clean_RF, bad_FR, bad_RF, short_FR, short_RF
