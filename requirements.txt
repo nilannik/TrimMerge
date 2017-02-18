@@ -1,2 +1,4 @@
 gi
-Bio
+numpy
+matplotlib
+biopython

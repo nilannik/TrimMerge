@@ -43,7 +43,7 @@ def find_insert_in_record(insert, record, min_length, threshold, verbose=False):
 
 
 def clean_records(record_FR, record_RF, adapters_dict, min_length, similarity, short_read_threshold):
-    clean_FR, clean_RF, bad_FR, bad_RF = None, None, None, None
+    clean_FR, clean_RF, bad_FR, bad_RF, short_FR, short_RF = None, None, None, None, None, None
 
     positions_FR_raw, similarity_FR_raw, inserts_FR_raw = find_insert_in_record(adapters_dict['FR'],
                                                                                 record_FR,
@@ -57,6 +57,11 @@ def clean_records(record_FR, record_RF, adapters_dict, min_length, similarity, s
                                                                                 similarity,
                                                                                 verbose=False)
 
+    num_found = [len(positions_FR_raw), len(positions_FR_raw)]
+    try:
+        max_similarity = [max(similarity_FR_raw), max(similarity_RF_raw)]
+    except ValueError:
+        max_similarity = [0, 0]
     positions_FR = []
     positions_RF = []
     if len(positions_FR_raw) > 0:
@@ -82,23 +87,29 @@ def clean_records(record_FR, record_RF, adapters_dict, min_length, similarity, s
         record_FR.letter_annotations['phred_quality'] = phred_quality_FR
         record_RF.letter_annotations['phred_quality'] = phred_quality_RF
         clean = True
+        short = False
     elif len(positions_FR) != len(positions_RF):
-        print('\n\n*** BAD ***')
-        print(positions_FR, positions_RF)
-        print('*** BAD ***\n\n')
+        #print('\n\n*** Suspicious ***')
+        #print(positions_FR, positions_RF)
+        #print('*** Suspicious ***\n\n')
         clean = False
+        short = False
     elif len(record_FR.seq) < short_read_threshold:
         clean = False
-        print('Short Sequence found: %d' % len(record_FR.seq))
-        print('FR:', record_FR.seq)
-        print('RF:', record_RF.seq)
+        short = True
+        #print('Short Sequence found: %d' % len(record_FR.seq))
+        #print('FR:', record_FR.seq)
+        #print('RF:', record_RF.seq)
     else:
         clean = True
-
+        short = False
     if clean:
         clean_FR = record_FR
         clean_RF = record_RF
+    elif short:
+        short_FR = record_FR
+        short_RF = record_RF
     else:
         bad_FR = record_FR
         bad_RF = record_RF
-    return clean_FR, clean_RF, bad_FR, bad_RF
+    return clean_FR, clean_RF, bad_FR, bad_RF, short_FR, short_RF, num_found, max_similarity
