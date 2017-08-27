@@ -16,14 +16,18 @@ import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
 
-from TrimMergeUI.Worker import count_length, compare_reads, init_trim_worker, clean_reads
+from matplotlib.figure import Figure
+import matplotlib.cm as cm
+from matplotlib.backends.backend_gtk3agg import FigureCanvasGTK3Agg as FigureCanvas
 
 from multiprocessing import Pool
 
+from TrimMergeUI.Worker import count_length, compare_reads, init_merge_worker, merge_overlaps
 
-class TrimPage(Gtk.Box):
+
+class MergePage(Gtk.Box):
     def __init__(self):
-        super(TrimPage, self).__init__()
+        super(MergePage, self).__init__()
 
         self.run = False
         self.total_length_of_reads_count = 0
@@ -43,7 +47,7 @@ class TrimPage(Gtk.Box):
         stat_title.set_markup('_'*50 + '\n<big><b>Input reads statistics</b></big>')
         statistics_box.pack_start(stat_title, False, False, 0)
         input_stat_grid = Gtk.Grid(column_spacing=10, row_spacing=10)
-        statistics_box.pack_start(input_stat_grid, True, True, 0)
+        statistics_box.pack_start(input_stat_grid, False, False, 0)
         self.total_number_of_reads = Gtk.Label('n/a')
         self.total_length_of_reads = Gtk.Label('n/a')
         input_stat_grid.attach(Gtk.Label('Reads count'), 0, 0, 1, 1)
@@ -51,28 +55,33 @@ class TrimPage(Gtk.Box):
         input_stat_grid.attach(Gtk.Label('Total length'), 0, 1, 1, 1)
         input_stat_grid.attach(self.total_length_of_reads, 1, 1, 1, 1)
         stat_title = Gtk.Label()
-        stat_title.set_markup('_'*50 + '\n<big><b>Output reads statistics</b></big>')
+        stat_title.set_markup('_'*50 + '\n<big><b>Contigs statistics</b></big>')
         statistics_box.pack_start(stat_title, False, False, 0)
         output_stat_grid = Gtk.Grid(column_spacing=10, row_spacing=10)
-        statistics_box.pack_start(output_stat_grid, True, True, 0)
+        statistics_box.pack_start(output_stat_grid, False, False, 0)
         self.total_number_of_reads_out = Gtk.Label('n/a')
-        self.total_length_of_reads_out = Gtk.Label('n/a')
-        self.total_number_of_reads_with_adapters = Gtk.Label('n/a')
-        self.total_number_of_suspicious = Gtk.Label('n/a')
-        self.max_number_of_adapters = Gtk.Label('n/a')
-        self.total_number_of_short = Gtk.Label('n/a')
+        self.total_number_of_contigs_out = Gtk.Label('n/a')
+        self.total_number_of_bad = Gtk.Label('n/a')
         output_stat_grid.attach(Gtk.Label('Reads count'), 0, 0, 1, 1)
         output_stat_grid.attach(self.total_number_of_reads_out, 1, 0, 1, 1)
-        output_stat_grid.attach(Gtk.Label('Total length'), 0, 1, 1, 1)
-        output_stat_grid.attach(self.total_length_of_reads_out, 1, 1, 1, 1)
-        output_stat_grid.attach(Gtk.Label('Reads with adapters'), 0, 2, 1, 1)
-        output_stat_grid.attach(self.total_number_of_reads_with_adapters, 1, 2, 1, 1)
-        output_stat_grid.attach(Gtk.Label('Suspicious reads count'), 0, 3, 1, 1)
-        output_stat_grid.attach(self.total_number_of_suspicious, 1, 3, 1, 1)
-        output_stat_grid.attach(Gtk.Label('Max adapters in one read'), 0, 4, 1, 1)
-        output_stat_grid.attach(self.max_number_of_adapters, 1, 4, 1, 1)
-        output_stat_grid.attach(Gtk.Label('Short reads count'), 0, 5, 1, 1)
-        output_stat_grid.attach(self.total_number_of_short, 1, 5, 1, 1)
+        output_stat_grid.attach(Gtk.Label('Contigs built'), 0, 1, 1, 1)
+        output_stat_grid.attach(self.total_number_of_contigs_out, 1, 1, 1, 1)
+        output_stat_grid.attach(Gtk.Label('Not overlapping'), 0, 2, 1, 1)
+        output_stat_grid.attach(self.total_number_of_bad, 1, 2, 1, 1)
+
+        self.fig = Figure()
+        #self.fig.suptitle('Contigs stats', fontsize=12)
+        self.ax_overlaps = self.fig.add_subplot(211)
+        self.ax_overlaps.set_title('overlap len')
+        self.ax_insert_len = self.fig.add_subplot(212)
+        self.ax_insert_len.set_title('insert len')
+        self.fig.subplots_adjust(left=0.2, hspace=0.3, top=0.95, bottom=0.1, right=0.9, wspace=0.0)
+        self.canvas = FigureCanvas(self.fig)
+        self.canvas.set_size_request(250, 380)
+        #self.sw = Gtk.ScrolledWindow()
+        #self.sw.add_with_viewport(self.canvas)
+        #statistics_box.pack_start(self.canvas, True, True, 0)
+        hbox.pack_start(self.canvas, True, True, 0)
 
         self.select_fr_button = Gtk.Button("Choose FR File")
         self.select_fr_button.connect("clicked", self.on_file_clicked)
@@ -101,31 +110,23 @@ class TrimPage(Gtk.Box):
         self.output_dir_name = None
         self.output_dir_label = Gtk.Label('Please choose output dir')
 
-        self.adapters_dict = None
-        adapters = ["Nextera PE", ]
-        self.adapter_combo = Gtk.ComboBoxText()
-        self.adapter_combo.connect("changed", self.on_adapter_combo_changed)
-        for adapter in adapters:
-            self.adapter_combo.append_text(adapter)
-        self.adapter_combo.set_active(0)
+        self.overlap_min_length = 20
+        adjustment = Gtk.Adjustment(self.overlap_min_length, 3, 100, 1, 10, 0)
+        self.overlap_min_length_button = Gtk.SpinButton()
+        self.overlap_min_length_button.set_adjustment(adjustment)
+        self.overlap_min_length_button.set_numeric(True)
+        self.overlap_min_length_button.set_update_policy(Gtk.SpinButtonUpdatePolicy.IF_VALID)
+        self.overlap_min_length_button.connect("changed", self.on_overlap_min_length_changed)
+        self.overlap_min_length_button.set_value(self.overlap_min_length)
 
-        self.adapter_min_length = 20
-        adjustment = Gtk.Adjustment(self.adapter_min_length, 3, 100, 1, 10, 0)
-        self.adapter_min_length_button = Gtk.SpinButton()
-        self.adapter_min_length_button.set_adjustment(adjustment)
-        self.adapter_min_length_button.set_numeric(True)
-        self.adapter_min_length_button.set_update_policy(Gtk.SpinButtonUpdatePolicy.IF_VALID)
-        self.adapter_min_length_button.connect("changed", self.on_adapter_min_length_changed)
-        self.adapter_min_length_button.set_value(self.adapter_min_length)
-
-        self.adapter_similarity = 60
-        adjustment = Gtk.Adjustment(self.adapter_similarity, 10, 100, 1, 10, 0)
-        self.adapter_similarity_button = Gtk.SpinButton()
-        self.adapter_similarity_button.set_adjustment(adjustment)
-        self.adapter_similarity_button.set_numeric(True)
-        self.adapter_similarity_button.set_update_policy(Gtk.SpinButtonUpdatePolicy.IF_VALID)
-        self.adapter_similarity_button.connect("changed", self.on_adapter_similarity_changed)
-        self.adapter_similarity_button.set_value(self.adapter_similarity)
+        self.overlap_similarity = 60
+        adjustment = Gtk.Adjustment(self.overlap_similarity, 10, 100, 1, 10, 0)
+        self.overlap_similarity_button = Gtk.SpinButton()
+        self.overlap_similarity_button.set_adjustment(adjustment)
+        self.overlap_similarity_button.set_numeric(True)
+        self.overlap_similarity_button.set_update_policy(Gtk.SpinButtonUpdatePolicy.IF_VALID)
+        self.overlap_similarity_button.connect("changed", self.on_overlap_similarity_changed)
+        self.overlap_similarity_button.set_value(self.overlap_similarity)
 
         self.run_button = Gtk.ToggleButton("Run")
         self.run_button.connect("toggled", self.on_run_toggled)
@@ -151,12 +152,10 @@ class TrimPage(Gtk.Box):
 
         grid.attach(self.select_out_dir_button, 0, 4, 1, 1)
         grid.attach(self.output_dir_label, 1, 4, 1, 1)
-        grid.attach(Gtk.Label('Select adapter:'), 0, 5, 1, 1)
-        grid.attach(self.adapter_combo, 1, 5, 1, 1)
-        grid.attach(Gtk.Label('Min adapter length:'), 0, 6, 1, 1)
-        grid.attach(self.adapter_min_length_button, 1, 6, 1, 1)
-        grid.attach(Gtk.Label('Adapter similarity %:'), 0, 7, 1, 1)
-        grid.attach(self.adapter_similarity_button, 1, 7, 1, 1)
+        grid.attach(Gtk.Label('Min overlap length:'), 0, 6, 1, 1)
+        grid.attach(self.overlap_min_length_button, 1, 6, 1, 1)
+        grid.attach(Gtk.Label('Overlap similarity %:'), 0, 7, 1, 1)
+        grid.attach(self.overlap_similarity_button, 1, 7, 1, 1)
         grid.attach(self.run_button, 0, 8, 2, 1)
         grid.attach(self.progressbar, 0, 9, 2, 1)
         grid.attach(self.status_label, 0, 10, 2, 1)
@@ -210,26 +209,36 @@ class TrimPage(Gtk.Box):
 
         dialog.destroy()
 
-    def on_adapter_combo_changed(self, combo):
-        text = combo.get_active_text()
-        if text != None:
-            print("Selected adapter=%s" % text)
-            self.read_in_adapters(text)
-
-    def on_adapter_min_length_changed(self, widget):
+    def on_overlap_min_length_changed(self, widget):
         value = int(widget.get_value())
-        max_len = min(len(self.adapters_dict['FR']), len(self.adapters_dict['RF']))
-        print('max_len', max_len)
-        if value > max_len:
-            self.adapter_min_length_button.set_value(max_len)
+        print("Overlap min length changed=%d" % value)
+        self.overlap_min_length = value
+
+    def on_overlap_similarity_changed(self, widget):
+        value = int(widget.get_value())
+        print("Overlap similarity changed=%d" % value)
+        self.overlap_similarity = value
+
+    def on_run_toggled(self, button):
+        if button.get_active():
+            state = "on"
+            if self.output_dir_name is None:
+                print('Select output dir first!')
+                self.status_label.set_text('Select output dir first!')
+                #self.warn_no_out_dir()
+                self.run_button.set_active(False)
+                return
+            self.run = True
         else:
-            print("Adapter min length changed=%d" % value)
-            self.adapter_min_length = value
-
-    def on_adapter_similarity_changed(self, widget):
-        value = int(widget.get_value())
-        print("Adapter similarity changed=%d" % value)
-        self.adapter_similarity = value
+            state = "off"
+            self.run = False
+            #self.status_label.set_text('Idle')
+        print("Run button was turned", state)
+        self.lock_controls(lock=self.run)
+        if self.run:
+            while Gtk.events_pending():
+                Gtk.main_iteration()
+            self.prepare_to_run()
 
     def _file_name_label_update(self, label, file_name):
         if len(file_name) > 24:
@@ -237,37 +246,6 @@ class TrimPage(Gtk.Box):
         else:
             short_name = file_name
         label.set_text(short_name)
-
-    def read_in_adapters(self, adapter_name):
-        dir_path = join(dirname(realpath(__file__)), pardir)
-        adapters_dir = join(dir_path, 'adapters')
-        print(adapters_dir)
-        if adapter_name == 'Nextera PE':
-            adapters_file_name = join(adapters_dir, 'NexteraPE-PE_2.txt')
-            print(adapters_file_name)
-            nextera_records = SeqIO.parse(adapters_file_name, 'fasta', alphabet=IUPAC.ambiguous_dna)
-            self.adapters_dict = dict()
-            for record in nextera_records:
-                if record.id == 'Trans2_rc':
-                    self.adapters_dict['FR'] = record
-                elif record.id == 'Trans1_rc':
-                    self.adapters_dict['RF'] = record
-        print(self.adapters_dict)
-
-    def on_run_toggled(self, button):
-        if button.get_active():
-            state = "on"
-            self.run = True
-        else:
-            state = "off"
-            self.run = False
-            self.status_label.set_text('Idle')
-        print("Run button was turned", state)
-        self.lock_controls(lock=self.run)
-        if self.run:
-            while Gtk.events_pending():
-                Gtk.main_iteration()
-            self.prepare_to_run()
 
     def lock_controls(self, lock=True):
         if lock:
@@ -281,9 +259,8 @@ class TrimPage(Gtk.Box):
         self.file_format_combo.set_sensitive(release)
         self.alphabet_combo.set_sensitive(release)
         self.select_out_dir_button.set_sensitive(release)
-        self.adapter_combo.set_sensitive(release)
-        self.adapter_min_length_button.set_sensitive(release)
-        self.adapter_similarity_button.set_sensitive(release)
+        self.overlap_min_length_button.set_sensitive(release)
+        self.overlap_similarity_button.set_sensitive(release)
         self.get_parent().set_show_tabs(release)
 
     def prepare_to_run(self):
@@ -307,27 +284,44 @@ class TrimPage(Gtk.Box):
             self.run_button.set_active(False)
             return
 
-        clean_FR, clean_RF, bad_FR, bad_RF, short_FR, short_RF = self.clean_PE_reads(max_count)
+        concat_FR, bad_seq_FR, bad_seq_RF, overlap_len, insert_len, matches = self.merge_PE_reads(max_count)
 
         fr_base_name, fr_extension = splitext(basename(self.fr_file_name))
         rf_base_name, rf_extension = splitext(basename(self.rf_file_name))
 
-        file_out_FR_clean = join(self.output_dir_name, fr_base_name + '_clean' + fr_extension)
-        file_out_FR_bad = join(self.output_dir_name, fr_base_name + '_suspicious' + fr_extension)
-        file_out_FR_short = join(self.output_dir_name, fr_base_name + '_short' + fr_extension)
-        file_out_RF_clean = join(self.output_dir_name, rf_base_name + '_clean' + fr_extension)
-        file_out_RF_bad = join(self.output_dir_name, rf_base_name + '_suspicious' + fr_extension)
-        file_out_RF_short = join(self.output_dir_name, rf_base_name + '_short' + fr_extension)
+        file_out_FR_concat = join(self.output_dir_name, fr_base_name + '_contigs' + fr_extension)
+        file_out_FR_bad = join(self.output_dir_name, fr_base_name + '_no_overlap' + fr_extension)
+        file_out_RF_bad = join(self.output_dir_name, rf_base_name + '_no_overlap' + fr_extension)
+        insert_len_file = join(self.output_dir_name, fr_base_name + '_insert_len.txt')
+        overlap_len_file = join(self.output_dir_name, fr_base_name + '_overlap_len.txt')
+        matches_file = join(self.output_dir_name, fr_base_name + '_matches.txt')
+        f = open(insert_len_file, 'w')
+        for item in insert_len:
+            f.write("%s\n" % item)
+        f.close()
+        f = open(overlap_len_file, 'w')
+        for item in overlap_len:
+            f.write("%s\n" % item)
+        f.close()
+        f = open(matches_file, 'w')
+        for item in matches:
+            f.write("%s\n" % item)
+        f.close()
 
-        SeqIO.write(clean_FR, file_out_FR_clean, self.file_format)
-        SeqIO.write(clean_RF, file_out_RF_clean, self.file_format)
-        SeqIO.write(bad_FR, file_out_FR_bad, self.file_format)
-        SeqIO.write(bad_RF, file_out_RF_bad, self.file_format)
-        SeqIO.write(short_FR, file_out_FR_short, self.file_format)
-        SeqIO.write(short_RF, file_out_RF_short, self.file_format)
+        SeqIO.write(concat_FR, file_out_FR_concat, self.file_format)
+        SeqIO.write(bad_seq_FR, file_out_FR_bad, self.file_format)
+        SeqIO.write(bad_seq_RF, file_out_RF_bad, self.file_format)
 
         self.run_button.set_active(False)
         self.status_label.set_text('Idle')
+
+    def warn_no_out_dir(self):
+        dialog = Gtk.MessageDialog(self, 0, Gtk.MessageType.INFO,
+                                   Gtk.ButtonsType.OK, "No output directory")
+        dialog.format_secondary_text(
+            "Select output directory first!")
+        dialog.run()
+        dialog.destroy()
 
     def count_records(self):
         self.status_label.set_text('Reading in sequences...')
@@ -348,13 +342,13 @@ class TrimPage(Gtk.Box):
                 Gtk.main_iteration()
             try:
                 len_fr += next(len_fr_iter)
-                max_count_fr +=1
+                max_count_fr += 1
             except StopIteration:
                 fr_done = True
                 pass
             try:
                 len_rf += next(len_rf_iter)
-                max_count_rf +=1
+                max_count_rf += 1
             except StopIteration:
                 rf_done = True
                 pass
@@ -404,38 +398,28 @@ class TrimPage(Gtk.Box):
         self.status_label = Gtk.Label('Idle')
         return result
 
-    def clean_PE_reads(self, max_count=1e10):
-        self.status_label.set_text('Scanning for adapters...')
+    def merge_PE_reads(self, max_count=1e10):
+        self.status_label.set_text('Scanning for overlaps...')
         records_FR = SeqIO.parse(self.fr_file_name, self.file_format, alphabet=self.alphabet)
         records_RF = SeqIO.parse(self.rf_file_name, self.file_format, alphabet=self.alphabet)
-        short_read_threshold = self.adapter_min_length
 
-        pool = Pool(initializer=init_trim_worker, initargs=(self.adapters_dict, self.adapter_min_length,
-                                                            self.adapter_similarity,
-                                                            short_read_threshold))
-        results = pool.imap(clean_reads, zip(records_FR, records_RF), chunksize=1000)
+        pool = Pool(initializer=init_merge_worker, initargs=(self.overlap_min_length,
+                                                             self.overlap_similarity,
+                                                             True))
+        results = pool.imap(merge_overlaps, zip(records_FR, records_RF), chunksize=1000)
 
-        clean_FR = []
-        clean_RF = []
-
-        bad_FR = []
-        bad_RF = []
-
-        short_FR = []
-        short_RF = []
+        concat_FR = []
+        bad_seq_FR = []
+        bad_seq_RF = []
+        overlap_len = []
+        matches = []
+        insert_len = []
 
         count = 0
         count_good = 0
-        good_fr_len = 0
-        good_rf_len = 0
         count_bad = 0
-        count_short = 0
-        count_adapters_fr = 0
-        count_adapters_rf = 0
-        max_adapters_per_read_fr = 0
-        max_adapters_per_read_rf = 0
-        max_similarity_fr = 0
-        max_similarity_rf = 0
+        last_plot_update = 0
+        plot_update_interval = 1000
 
         working = True
 
@@ -446,45 +430,35 @@ class TrimPage(Gtk.Box):
             while Gtk.events_pending():
                 Gtk.main_iteration()
             try:
-                clean_FR_rec, clean_RF_rec, bad_FR_rec, bad_RF_rec, \
-                short_FR_rec, short_RF_rec, adapters_count, max_sim = next(results)
+                ret_FR, ret_RF, overlap, max_match, \
+                overlap_FR, overlap_RF, insert_Len, concatenated_seq = next(results)
                 count += 1
                 self.progressbar.set_fraction(count / max_count)
+                self.total_number_of_reads_out.set_text('%d (%2.2f %%)' % (count, count / max_count * 100))
 
-                count_adapters_fr += adapters_count[0]
-                count_adapters_rf += adapters_count[1]
-                self.total_number_of_reads_with_adapters.set_text(
-                    '%2.5g / %2.5g' % (count_adapters_fr, count_adapters_rf))
-                if adapters_count[0] > max_adapters_per_read_fr:
-                    max_adapters_per_read_fr = adapters_count[0]
-                if adapters_count[1] > max_adapters_per_read_rf:
-                    max_adapters_per_read_rf = adapters_count[1]
-                self.max_number_of_adapters.set_text('%d, %d' % (max_adapters_per_read_fr, max_adapters_per_read_rf))
-                if clean_FR_rec:
-                    clean_FR.append(clean_FR_rec)
+                if max_match >= self.overlap_similarity:
+                    concat_FR.append(concatenated_seq)
+                    insert_len.append(insert_Len)
+                    overlap_len.append(len(overlap.seq))
+                    matches.append(max_match)
                     count_good += 1
-                    self.total_number_of_reads_out.set_text('%d (%2.2f %%)' % (count_good, count_good / count * 100))
-                    good_fr_len += len(clean_FR_rec.seq)
-                if clean_RF_rec:
-                    clean_RF.append(clean_RF_rec)
-                    good_rf_len += len(clean_RF_rec.seq)
-                    good_total_len = good_fr_len + good_rf_len
-                    self.total_length_of_reads_out.set_text('%2.5g (%2.2f %%)' % (good_total_len,
-                                                                                  good_total_len / self.total_length_of_reads_count * 100))
-                if bad_FR_rec:
+                    self.total_number_of_contigs_out.set_text('%d (%2.2f %%)' % (count_good, count_good / count * 100))
+                    if count - last_plot_update > plot_update_interval:
+                        last_plot_update = count
+                        self.ax_overlaps.cla()
+                        [n, X, V] = self.ax_overlaps.hist(overlap_len, bins=50)#, normed=True)
+                        self.ax_overlaps.set_title('overlap len')
+                        self.ax_insert_len.cla()
+                        [n, X, V] = self.ax_insert_len.hist(insert_len, bins=50)  # , normed=True)
+                        self.ax_insert_len.set_title('insert len')
+                        self.fig.canvas.draw()
+                else:
+                    bad_seq_FR.append(ret_FR)
+                    bad_seq_RF.append(ret_RF)
                     count_bad += 1
-                    self.total_number_of_suspicious.set_text('%d (%2.2f %%)' % (count_bad, count_bad / count * 100))
-                    bad_FR.append(bad_FR_rec)
-                if bad_RF_rec:
-                    bad_RF.append(bad_RF_rec)
-                if short_FR_rec:
-                    count_short += 1
-                    self.total_number_of_short.set_text('%d (%2.2f %%)' % (count_short, count_short / count * 100))
-                    short_FR.append(short_FR_rec)
-                if short_RF_rec:
-                    short_RF.append(short_RF_rec)
+                    self.total_number_of_bad.set_text('%d (%2.2f %%)' % (count_bad, count_bad / count * 100))
             except StopIteration:
                 working = False
                 pass
 
-        return clean_FR, clean_RF, bad_FR, bad_RF, short_FR, short_RF
+        return concat_FR, bad_seq_FR, bad_seq_RF, overlap_len, insert_len, matches

@@ -113,3 +113,96 @@ def clean_records(record_FR, record_RF, adapters_dict, min_length, similarity, s
         bad_FR = record_FR
         bad_RF = record_RF
     return clean_FR, clean_RF, bad_FR, bad_RF, short_FR, short_RF, num_found, max_similarity
+
+
+def find_overlap(seq_FR, seq_RF, min_length, threshold, correct_pq=True):
+    str_FR = np.array(list(seq_FR.seq))
+    str_RF = np.array(list(seq_RF.reverse_complement().seq))
+    insert_Len = str_FR.size + str_RF.size
+    L_min = min(str_FR.size, str_RF.size)
+    L_max = max(str_FR.size, str_RF.size)
+    if str_FR.size >= str_RF.size:
+        long_str = str_FR
+        short_str = str_RF
+        long_seq = seq_FR
+        short_seq = seq_RF.reverse_complement()
+        short_seq.id = seq_RF.id
+    else:
+        long_str = str_RF
+        short_str = str_FR
+        long_seq = seq_RF.reverse_complement()
+        long_seq.id = seq_RF.id
+        short_seq = seq_FR
+    concatenated_seq = seq_FR + seq_RF.reverse_complement()
+    concatenated_seq.id = seq_FR.id
+    start = 0
+    L = L_min
+    match = 0
+    max_match = 0
+    max_match_start = 0
+    max_match_L = L_min
+    while start <= L_max - min_length:
+        comparison = long_str[start: L + start] == short_str[0: L]
+        match = np.sum(comparison) / L * 100
+        if match > max_match:
+            max_match = match
+            max_match_start = start
+            max_match_L = L
+        start += 1
+        L = min(L_max - start, L)
+    if max_match >= threshold:
+        insert_Len = str_FR.size + str_RF.size - max_match_L
+        comparison = long_str[max_match_start: max_match_L + max_match_start] == short_str[0: max_match_L]
+        faults = np.where(comparison == 0)[0]
+        if correct_pq:
+            for idx in range(max_match_L):
+                PQ_long = np.array(long_seq.letter_annotations['phred_quality'])[max_match_start + idx]
+                PQ_short = np.array(short_seq.letter_annotations['phred_quality'])[idx]
+                if long_str[max_match_start + idx] != short_str[idx]:
+                    if PQ_long > PQ_short:
+                        id_backup = short_seq.id
+                        tmp_seq = short_seq.seq.tomutable()
+                        tmp_seq[idx] = long_str[max_match_start + idx]
+                        annot_backup = short_seq.letter_annotations
+                        short_seq.letter_annotations = {}
+                        short_seq.seq = tmp_seq.toseq()
+                        short_seq.letter_annotations = annot_backup
+                        short_seq.id = id_backup
+                    elif PQ_long < PQ_short:
+                        id_backup = long_seq.id
+                        tmp_seq = long_seq.seq.tomutable()
+                        tmp_seq[max_match_start + idx] = short_str[idx]
+                        annot_backup = long_seq.letter_annotations
+                        long_seq.letter_annotations = {}
+                        long_seq.seq = tmp_seq.toseq()
+                        long_seq.letter_annotations = annot_backup
+                        long_seq.id = id_backup
+                if PQ_long != PQ_short:
+                    long_seq.letter_annotations['phred_quality'][max_match_start + idx] = max(PQ_long, PQ_short)
+                    short_seq.letter_annotations['phred_quality'][idx] = max(PQ_long, PQ_short)
+
+    overlap = long_seq[max_match_start: max_match_L + max_match_start]
+
+    if str_FR.size >= str_RF.size:
+        concatenated_seq = seq_FR[0:max_match_start] + seq_RF.reverse_complement()[:]
+        concatenated_seq.id = seq_FR.id
+        overlap_FR = seq_FR[max_match_start:max_match_L + max_match_start]
+        overlap_FR.id = seq_FR.id
+        overlap_RF = seq_RF.reverse_complement()[0:max_match_L].reverse_complement()
+        overlap_RF.id = seq_RF.id
+        ret_FR = long_seq
+        ret_RF = short_seq.reverse_complement()
+        ret_RF.id = seq_RF.id
+    else:
+        concatenated_seq = seq_RF.reverse_complement()[0:max_match_start] + seq_FR[:]
+        concatenated_seq.id = seq_FR.id
+        overlap_RF = seq_RF.reverse_complement()[max_match_start:max_match_L + max_match_start].reverse_complement()
+        overlap_RF.id = seq_RF.id
+        overlap_FR = seq_FR[0:max_match_L]
+        overlap_FR.id = seq_FR.id
+        ret_FR = short_seq
+        ret_RF = long_seq.reverse_complement()
+        ret_RF.id = seq_RF.id
+    if L_max < min_length:
+        insert_Len = 0
+    return ret_FR, ret_RF, overlap, max_match, overlap_FR, overlap_RF, insert_Len, concatenated_seq
