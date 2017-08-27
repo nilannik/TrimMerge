@@ -256,12 +256,16 @@ class TrimPage(Gtk.Box):
 
     def on_run_toggled(self, button):
         if button.get_active():
+            if self.output_dir_name is None:
+                print('Select output dir first!')
+                self.status_label.set_text('Select output dir first!')
+                self.run_button.set_active(False)
+                return
             state = "on"
             self.run = True
         else:
             state = "off"
             self.run = False
-            self.status_label.set_text('Idle')
         print("Run button was turned", state)
         self.lock_controls(lock=self.run)
         if self.run:

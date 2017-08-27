@@ -225,14 +225,12 @@ class MergePage(Gtk.Box):
             if self.output_dir_name is None:
                 print('Select output dir first!')
                 self.status_label.set_text('Select output dir first!')
-                #self.warn_no_out_dir()
                 self.run_button.set_active(False)
                 return
             self.run = True
         else:
             state = "off"
             self.run = False
-            #self.status_label.set_text('Idle')
         print("Run button was turned", state)
         self.lock_controls(lock=self.run)
         if self.run:
@@ -314,14 +312,6 @@ class MergePage(Gtk.Box):
 
         self.run_button.set_active(False)
         self.status_label.set_text('Idle')
-
-    def warn_no_out_dir(self):
-        dialog = Gtk.MessageDialog(self, 0, Gtk.MessageType.INFO,
-                                   Gtk.ButtonsType.OK, "No output directory")
-        dialog.format_secondary_text(
-            "Select output directory first!")
-        dialog.run()
-        dialog.destroy()
 
     def count_records(self):
         self.status_label.set_text('Reading in sequences...')
