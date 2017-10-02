@@ -1,6 +1,6 @@
 from __future__ import division, print_function
 
-from os import pardir
+from os import pardir, remove
 from os.path import join, dirname, basename, realpath, splitext
 
 try:
@@ -22,10 +22,11 @@ from matplotlib.backends.backend_gtk3agg import FigureCanvasGTK3Agg as FigureCan
 
 from multiprocessing import Pool
 
-from TrimMergeUI.Worker import count_length, compare_reads, init_merge_worker, merge_overlaps
+from TrimMergeUI.Worker import partition_file, count_length, compare_reads, init_merge_worker, merge_overlaps, merge_overlaps_no_reverse_complement
 
 
 class MergePage(Gtk.Box):
+
     def __init__(self):
         super(MergePage, self).__init__()
 
@@ -105,6 +106,9 @@ class MergePage(Gtk.Box):
             self.alphabet_combo.append_text(alphabet)
         self.alphabet_combo.set_active(0)
 
+        self.reverse_complement_rf = Gtk.CheckButton("Reverse complement RF file")
+        self.reverse_complement_rf.set_active(True)
+
         self.select_out_dir_button = Gtk.Button("Choose output directory")
         self.select_out_dir_button.connect("clicked", self.on_folder_clicked)
         self.output_dir_name = None
@@ -150,8 +154,10 @@ class MergePage(Gtk.Box):
         self.file_format = None
         self.alphabet = None
 
-        grid.attach(self.select_out_dir_button, 0, 4, 1, 1)
-        grid.attach(self.output_dir_label, 1, 4, 1, 1)
+        grid.attach(self.reverse_complement_rf, 0, 4, 2, 1)
+
+        grid.attach(self.select_out_dir_button, 0, 5, 1, 1)
+        grid.attach(self.output_dir_label, 1, 5, 1, 1)
         grid.attach(Gtk.Label('Min overlap length:'), 0, 6, 1, 1)
         grid.attach(self.overlap_min_length_button, 1, 6, 1, 1)
         grid.attach(Gtk.Label('Overlap similarity %:'), 0, 7, 1, 1)
@@ -161,6 +167,9 @@ class MergePage(Gtk.Box):
         grid.attach(self.status_label, 0, 10, 2, 1)
         self.show_all()
         self.lock_label.hide()
+
+        self.temp_files_FR = []
+        self.temp_files_RF = []
 
     def on_file_clicked(self, widget):
         dialog = Gtk.FileChooserDialog("Please choose a file", self.get_toplevel(),
@@ -256,6 +265,7 @@ class MergePage(Gtk.Box):
         self.select_rf_button.set_sensitive(release)
         self.file_format_combo.set_sensitive(release)
         self.alphabet_combo.set_sensitive(release)
+        self.reverse_complement_rf.set_sensitive(release)
         self.select_out_dir_button.set_sensitive(release)
         self.overlap_min_length_button.set_sensitive(release)
         self.overlap_similarity_button.set_sensitive(release)
@@ -272,16 +282,22 @@ class MergePage(Gtk.Box):
         elif self.alphabet == "Extended DNA":
             self.alphabet = IUPAC.extended_dna
 
+        print('Partitioning files')
+        self.partition_files()
+
+        print('Counting records')
         response, max_count = self.count_records()
         if not response:
             self.run_button.set_active(False)
             return
 
+        print('Comparing FR and RF records')
         response = self.compare_records()
         if not response:
             self.run_button.set_active(False)
             return
-
+        '''
+        print('Merging')
         concat_FR, bad_seq_FR, bad_seq_RF, overlap_len, insert_len, matches = self.merge_PE_reads(max_count)
 
         fr_base_name, fr_extension = splitext(basename(self.fr_file_name))
@@ -309,18 +325,59 @@ class MergePage(Gtk.Box):
         SeqIO.write(concat_FR, file_out_FR_concat, self.file_format)
         SeqIO.write(bad_seq_FR, file_out_FR_bad, self.file_format)
         SeqIO.write(bad_seq_RF, file_out_RF_bad, self.file_format)
+        '''
+        print('Removing temp files')
+        self.delete_temp_files()
 
         self.run_button.set_active(False)
         self.status_label.set_text('Idle')
 
+    def delete_temp_files(self):
+        for file_descriptor in self.temp_files_FR + self.temp_files_RF:
+            remove(file_descriptor['file_name'])
+
+    def partition_files(self):
+        self.status_label.set_text('Partitioning files...')
+        print('Creating pool')
+        pool = Pool(2)
+        fr_iter = pool.imap(
+            partition_file,
+            [{'file_name': self.fr_file_name,
+              'format': self.file_format,
+              'alphabet': self.alphabet,
+              'out_dir': self.output_dir_name}])
+        rf_iter = pool.imap(
+            partition_file,
+            [{'file_name': self.rf_file_name,
+              'format': self.file_format,
+              'alphabet': self.alphabet,
+              'out_dir': self.output_dir_name}])
+        fr_done = False
+        rf_done = False
+        while not (fr_done and rf_done):
+            while Gtk.events_pending():
+                Gtk.main_iteration()
+            try:
+                self.temp_files_FR = next(fr_iter)
+            except StopIteration:
+                fr_done = True
+                pass
+            try:
+                self.temp_files_RF = next(rf_iter)
+            except StopIteration:
+                rf_done = True
+                pass
+        print('Split FR and RF into %d and %d parts' % (len(self.temp_files_FR), len(self.temp_files_RF)))
+
     def count_records(self):
         self.status_label.set_text('Reading in sequences...')
-        records_FR = SeqIO.parse(self.fr_file_name, self.file_format, alphabet=self.alphabet)
-        records_RF = SeqIO.parse(self.rf_file_name, self.file_format, alphabet=self.alphabet)
 
+        print('Creating pool')
         pool = Pool()
-        len_fr_iter = pool.imap(count_length, records_FR, chunksize=100)
-        len_rf_iter = pool.imap(count_length, records_RF, chunksize=100)
+        print('Count FR')
+        len_fr_iter = pool.imap(count_length, self.temp_files_FR)
+        print('Count RF')
+        len_rf_iter = pool.imap(count_length, self.temp_files_RF)
         fr_done = False
         rf_done = False
         max_count_fr = 0
@@ -331,14 +388,16 @@ class MergePage(Gtk.Box):
             while Gtk.events_pending():
                 Gtk.main_iteration()
             try:
-                len_fr += next(len_fr_iter)
-                max_count_fr += 1
+                len_fr_i, count_fr_i = next(len_fr_iter)
+                len_fr += len_fr_i
+                max_count_fr += count_fr_i
             except StopIteration:
                 fr_done = True
                 pass
             try:
-                len_rf += next(len_rf_iter)
-                max_count_rf += 1
+                len_rf_i, count_rf_i = next(len_rf_iter)
+                len_rf += len_rf_i
+                max_count_rf += count_rf_i
             except StopIteration:
                 rf_done = True
                 pass
@@ -359,18 +418,18 @@ class MergePage(Gtk.Box):
 
     def compare_records(self):
         self.status_label.set_text('Checking sequences...')
-        records_FR = SeqIO.parse(self.fr_file_name, self.file_format, alphabet=self.alphabet)
-        records_RF = SeqIO.parse(self.rf_file_name, self.file_format, alphabet=self.alphabet)
 
+        print('Creating pool')
         pool = Pool()
-        len_fr_iter = pool.imap(compare_reads, zip(records_FR, records_RF), chunksize=100)
+        print('Run FR-RF comparison')
+        cmp_iter = pool.imap(compare_reads, zip(self.temp_files_FR, self.temp_files_RF))
         cmp_done = False
         result = True
         while not cmp_done:
             while Gtk.events_pending():
                 Gtk.main_iteration()
             try:
-                result = next(len_fr_iter)
+                result = next(cmp_iter)
                 if not result:
                     pool.terminate()
                     break
@@ -396,7 +455,10 @@ class MergePage(Gtk.Box):
         pool = Pool(initializer=init_merge_worker, initargs=(self.overlap_min_length,
                                                              self.overlap_similarity,
                                                              True))
-        results = pool.imap(merge_overlaps, zip(records_FR, records_RF), chunksize=1000)
+        if self.reverse_complement_rf.get_active():
+            results = pool.imap(merge_overlaps, zip(records_FR, records_RF), chunksize=1000)
+        else:
+            results = pool.imap(merge_overlaps_no_reverse_complement, zip(records_FR, records_RF), chunksize=1000)
 
         concat_FR = []
         bad_seq_FR = []
