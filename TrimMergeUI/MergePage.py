@@ -22,7 +22,8 @@ from matplotlib.backends.backend_gtk3agg import FigureCanvasGTK3Agg as FigureCan
 
 from multiprocessing import Pool
 
-from TrimMergeUI.Worker import partition_file, count_length, compare_reads, init_merge_worker, merge_overlaps, merge_overlaps_no_reverse_complement
+from TrimMergeUI.Worker import partition_file, count_length, compare_reads, init_merge_worker, merge_overlaps
+from TrimMergeUI.utils import batch_iterator
 
 
 class MergePage(Gtk.Box):
@@ -283,10 +284,7 @@ class MergePage(Gtk.Box):
             self.alphabet = IUPAC.extended_dna
 
         print('Partitioning files')
-        self.partition_files()
-
-        print('Counting records')
-        response, max_count = self.count_records()
+        response, max_count = self.partition_files()
         if not response:
             self.run_button.set_active(False)
             return
@@ -296,7 +294,7 @@ class MergePage(Gtk.Box):
         if not response:
             self.run_button.set_active(False)
             return
-        '''
+
         print('Merging')
         concat_FR, bad_seq_FR, bad_seq_RF, overlap_len, insert_len, matches = self.merge_PE_reads(max_count)
 
@@ -325,7 +323,7 @@ class MergePage(Gtk.Box):
         SeqIO.write(concat_FR, file_out_FR_concat, self.file_format)
         SeqIO.write(bad_seq_FR, file_out_FR_bad, self.file_format)
         SeqIO.write(bad_seq_RF, file_out_RF_bad, self.file_format)
-        '''
+
         print('Removing temp files')
         self.delete_temp_files()
 
@@ -335,86 +333,79 @@ class MergePage(Gtk.Box):
     def delete_temp_files(self):
         for file_descriptor in self.temp_files_FR + self.temp_files_RF:
             remove(file_descriptor['file_name'])
+        self.temp_files_FR = []
+        self.temp_files_RF = []
 
     def partition_files(self):
         self.status_label.set_text('Partitioning files...')
-        print('Creating pool')
-        pool = Pool(2)
-        fr_iter = pool.imap(
-            partition_file,
-            [{'file_name': self.fr_file_name,
-              'format': self.file_format,
-              'alphabet': self.alphabet,
-              'out_dir': self.output_dir_name}])
-        rf_iter = pool.imap(
-            partition_file,
-            [{'file_name': self.rf_file_name,
-              'format': self.file_format,
-              'alphabet': self.alphabet,
-              'out_dir': self.output_dir_name}])
-        fr_done = False
-        rf_done = False
-        while not (fr_done and rf_done):
-            while Gtk.events_pending():
-                Gtk.main_iteration()
-            try:
-                self.temp_files_FR = next(fr_iter)
-            except StopIteration:
-                fr_done = True
-                pass
-            try:
-                self.temp_files_RF = next(rf_iter)
-            except StopIteration:
-                rf_done = True
-                pass
-        print('Split FR and RF into %d and %d parts' % (len(self.temp_files_FR), len(self.temp_files_RF)))
-
-    def count_records(self):
-        self.status_label.set_text('Reading in sequences...')
-
-        print('Creating pool')
-        pool = Pool()
-        print('Count FR')
-        len_fr_iter = pool.imap(count_length, self.temp_files_FR)
-        print('Count RF')
-        len_rf_iter = pool.imap(count_length, self.temp_files_RF)
-        fr_done = False
-        rf_done = False
-        max_count_fr = 0
-        max_count_rf = 0
+        chunk_size = 250
+        records_FR = SeqIO.parse(self.fr_file_name, self.file_format, alphabet=self.alphabet)
+        records_RF = SeqIO.parse(self.rf_file_name, self.file_format, alphabet=self.alphabet)
+        records_FR_iterator = batch_iterator(records_FR, chunk_size)
+        records_RF_iterator = batch_iterator(records_RF, chunk_size)
+        prefix_FR, extension_FR = splitext(basename(self.fr_file_name))
+        prefix_RF, extension_RF = splitext(basename(self.rf_file_name))
+        count_FR_files = 0
+        count_RF_files = 0
+        count_FR = 0
+        count_RF = 0
         len_fr = 0
         len_rf = 0
+        fr_done = False
+        rf_done = False
         while not (fr_done and rf_done):
             while Gtk.events_pending():
                 Gtk.main_iteration()
             try:
-                len_fr_i, count_fr_i = next(len_fr_iter)
-                len_fr += len_fr_i
-                max_count_fr += count_fr_i
+                batch, len_fr_batch = next(records_FR_iterator)
+                file_name = join(self.output_dir_name, prefix_FR + "_%04i" % (count_FR_files + 1) + extension_FR)
+                self.temp_files_FR.append({
+                    'file_name': file_name,
+                    'format': self.file_format,
+                    'alphabet': self.alphabet,
+                    'out_dir': self.output_dir_name
+                })
+                with open(file_name, "w") as handle:
+                    count = SeqIO.write(batch, handle, self.file_format)
+                print("Wrote %i records to %s" % (count, file_name))
+                count_FR_files += 1
+                count_FR += len(batch)
+                len_fr += len_fr_batch
             except StopIteration:
                 fr_done = True
                 pass
             try:
-                len_rf_i, count_rf_i = next(len_rf_iter)
-                len_rf += len_rf_i
-                max_count_rf += count_rf_i
+                batch, len_rf_batch = next(records_RF_iterator)
+                file_name = join(self.output_dir_name, prefix_RF + "_%04i" % (count_RF_files + 1) + extension_RF)
+                self.temp_files_RF.append({
+                    'file_name': file_name,
+                    'format': self.file_format,
+                    'alphabet': self.alphabet,
+                    'out_dir': self.output_dir_name
+                })
+                with open(file_name, "w") as handle:
+                    count = SeqIO.write(batch, handle, self.file_format)
+                print("Wrote %i records to %s" % (count, file_name))
+                count_RF_files += 1
+                count_RF += len(batch)
+                len_rf += len_rf_batch
             except StopIteration:
                 rf_done = True
                 pass
-            self.total_number_of_reads.set_text('%d' % max_count_fr)
+            self.total_number_of_reads.set_text('%d' % count_FR)
             self.total_length_of_reads_count = len_fr + len_rf
             self.total_length_of_reads.set_text('%g' % self.total_length_of_reads_count)
-        if max_count_fr != max_count_rf:
+        print('Split FR and RF into %d and %d parts' % (len(self.temp_files_FR), len(self.temp_files_RF)))
+        if count_FR != count_RF:
             dialog = Gtk.MessageDialog(self.get_toplevel(), 0, Gtk.MessageType.ERROR,
                                        Gtk.ButtonsType.CANCEL, "Different length of FR and RF files")
-            dialog.format_secondary_text(
-                "Number of forward and reverse reads must match")
+            dialog.format_secondary_text("Number of forward and reverse reads must match")
             dialog.run()
             dialog.destroy()
             result = False, 0
-        result = True
-        self.status_label = Gtk.Label('Idle')
-        return result, max_count_fr
+        else:
+            result = True, count_FR
+        return result
 
     def compare_records(self):
         self.status_label.set_text('Checking sequences...')
@@ -422,7 +413,7 @@ class MergePage(Gtk.Box):
         print('Creating pool')
         pool = Pool()
         print('Run FR-RF comparison')
-        cmp_iter = pool.imap(compare_reads, zip(self.temp_files_FR, self.temp_files_RF))
+        cmp_iter = pool.imap(compare_reads, list(zip(self.temp_files_FR, self.temp_files_RF)))
         cmp_done = False
         result = True
         while not cmp_done:
@@ -444,21 +435,21 @@ class MergePage(Gtk.Box):
                 "IDs of PE reads must match")
             dialog.run()
             dialog.destroy()
+        print('Closing pool')
+        pool.close()
+        pool.join()
         self.status_label = Gtk.Label('Idle')
         return result
 
     def merge_PE_reads(self, max_count=1e10):
         self.status_label.set_text('Scanning for overlaps...')
-        records_FR = SeqIO.parse(self.fr_file_name, self.file_format, alphabet=self.alphabet)
-        records_RF = SeqIO.parse(self.rf_file_name, self.file_format, alphabet=self.alphabet)
-
+        print('Creating pool')
         pool = Pool(initializer=init_merge_worker, initargs=(self.overlap_min_length,
                                                              self.overlap_similarity,
-                                                             True))
-        if self.reverse_complement_rf.get_active():
-            results = pool.imap(merge_overlaps, zip(records_FR, records_RF), chunksize=1000)
-        else:
-            results = pool.imap(merge_overlaps_no_reverse_complement, zip(records_FR, records_RF), chunksize=1000)
+                                                             True,
+                                                             self.reverse_complement_rf.get_active()))
+
+        results = pool.imap(merge_overlaps, list(zip(self.temp_files_FR, self.temp_files_RF)))
 
         concat_FR = []
         bad_seq_FR = []
@@ -468,8 +459,8 @@ class MergePage(Gtk.Box):
         insert_len = []
 
         count = 0
-        count_good = 0
-        count_bad = 0
+        count_overlapping = 0
+        count_not_overlapping = 0
         last_plot_update = 0
         plot_update_interval = 1000
 
@@ -482,35 +473,39 @@ class MergePage(Gtk.Box):
             while Gtk.events_pending():
                 Gtk.main_iteration()
             try:
-                ret_FR, ret_RF, overlap, max_match, \
-                overlap_FR, overlap_RF, insert_Len, concatenated_seq = next(results)
-                count += 1
+                concat_FR_i, bad_seq_FR_i, bad_seq_RF_i, overlap_len_i, matches_i, insert_len_i,\
+                count_i, count_overlapping_i, count_not_overlapping_i = next(results)
+                count += count_i
+                count_overlapping += count_overlapping_i
+                count_not_overlapping += count_not_overlapping_i
+                concat_FR += concat_FR_i
+                bad_seq_FR += bad_seq_FR_i
+                bad_seq_RF += bad_seq_RF_i
+                overlap_len += overlap_len_i
+                matches += matches_i
+                insert_len += insert_len_i
                 self.progressbar.set_fraction(count / max_count)
                 self.total_number_of_reads_out.set_text('%d (%2.2f %%)' % (count, count / max_count * 100))
 
-                if max_match >= self.overlap_similarity:
-                    concat_FR.append(concatenated_seq)
-                    insert_len.append(insert_Len)
-                    overlap_len.append(len(overlap.seq))
-                    matches.append(max_match)
-                    count_good += 1
-                    self.total_number_of_contigs_out.set_text('%d (%2.2f %%)' % (count_good, count_good / count * 100))
-                    if count - last_plot_update > plot_update_interval:
-                        last_plot_update = count
-                        self.ax_overlaps.cla()
-                        [n, X, V] = self.ax_overlaps.hist(overlap_len, bins=50)#, normed=True)
-                        self.ax_overlaps.set_title('overlap len')
-                        self.ax_insert_len.cla()
-                        [n, X, V] = self.ax_insert_len.hist(insert_len, bins=50)  # , normed=True)
-                        self.ax_insert_len.set_title('insert len')
-                        self.fig.canvas.draw()
-                else:
-                    bad_seq_FR.append(ret_FR)
-                    bad_seq_RF.append(ret_RF)
-                    count_bad += 1
-                    self.total_number_of_bad.set_text('%d (%2.2f %%)' % (count_bad, count_bad / count * 100))
+                self.total_number_of_contigs_out.set_text('%d (%2.2f %%)' % (count_overlapping,
+                                                                             count_overlapping / count * 100))
+                if count - last_plot_update > plot_update_interval:
+                    last_plot_update = count
+                    self.ax_overlaps.cla()
+                    [n, X, V] = self.ax_overlaps.hist(overlap_len, bins=50)#, normed=True)
+                    self.ax_overlaps.set_title('overlap len')
+                    self.ax_insert_len.cla()
+                    [n, X, V] = self.ax_insert_len.hist(insert_len, bins=50)  # , normed=True)
+                    self.ax_insert_len.set_title('insert len')
+                    self.fig.canvas.draw()
+
+                self.total_number_of_bad.set_text('%d (%2.2f %%)' % (count_not_overlapping,
+                                                                     count_not_overlapping / count * 100))
             except StopIteration:
                 working = False
                 pass
-
+        print('Closing pool')
+        pool.close()
+        pool.join()
+        self.status_label = Gtk.Label('Idle')
         return concat_FR, bad_seq_FR, bad_seq_RF, overlap_len, insert_len, matches
