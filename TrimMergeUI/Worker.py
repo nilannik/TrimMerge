@@ -47,12 +47,7 @@ def compare_reads(parameters):
     parameters_RF = parameters[1]
     records_FR = SeqIO.parse(parameters_FR['file_name'], parameters_FR['format'], alphabet=parameters_FR['alphabet'])
     records_RF = SeqIO.parse(parameters_RF['file_name'], parameters_RF['format'], alphabet=parameters_RF['alphabet'])
-    while True:
-        try:
-            record_FR = next(records_FR)
-            record_RF = next(records_RF)
-        except StopIteration:
-            break
+    for record_FR, record_RF in list(zip(records_FR, records_RF)):
         if not record_FR.id == record_RF.id:
             print('ID mismatch:', records_FR.id, record_RF.id)
             return False
@@ -96,7 +91,7 @@ def clean_reads(parameters):
     records_RF = list(SeqIO.parse(parameters_RF['file_name'], parameters_RF['format'], alphabet=parameters_RF['alphabet']))
     clean_FR, clean_RF, bad_FR, bad_RF, short_FR, short_RF, num_found, max_similarity, \
     count, count_clean, count_bad, count_short,\
-    clean_fr_len, clean_rf_len, clean_total_len = clean_records(records_FR, records_RF,
+    clean_fr_len, clean_rf_len, clean_total_len = clean_records(list(records_FR), list(records_RF),
                                                                 trim_worker.adapters_dict,
                                                                 trim_worker.adapter_min_length,
                                                                 trim_worker.adapter_similarity,
@@ -113,7 +108,7 @@ def merge_overlaps(parameters):
     records_RF = SeqIO.parse(parameters_RF['file_name'], parameters_RF['format'], alphabet=parameters_RF['alphabet'])
     concat_FR, bad_seq_FR, bad_seq_RF,\
     overlap_len, matches, insert_len,\
-    count, count_overlapping, count_not_overlapping = find_overlaps(records_FR, records_RF,
+    count, count_overlapping, count_not_overlapping = find_overlaps(list(records_FR), list(records_RF),
                                                                     merge_worker.overlap_min_length,
                                                                     merge_worker.overlap_similarity,
                                                                     merge_worker.correct_pq,
