@@ -1,7 +1,7 @@
 from __future__ import division, print_function
 
-from os import pardir, remove
-from os.path import join, dirname, basename, realpath, splitext
+from os import remove
+from os.path import join, basename, splitext
 
 try:
     import itertools.izip as zip
@@ -17,7 +17,6 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
 
 from matplotlib.figure import Figure
-import matplotlib.cm as cm
 from matplotlib.backends.backend_gtk3agg import FigureCanvasGTK3Agg as FigureCanvas
 
 from multiprocessing import Pool
@@ -72,7 +71,6 @@ class MergePage(Gtk.Box):
         output_stat_grid.attach(self.total_number_of_bad, 1, 2, 1, 1)
 
         self.fig = Figure()
-        #self.fig.suptitle('Contigs stats', fontsize=12)
         self.ax_overlaps = self.fig.add_subplot(211)
         self.ax_overlaps.set_title('overlap len')
         self.ax_insert_len = self.fig.add_subplot(212)
@@ -80,9 +78,6 @@ class MergePage(Gtk.Box):
         self.fig.subplots_adjust(left=0.2, hspace=0.3, top=0.95, bottom=0.1, right=0.9, wspace=0.0)
         self.canvas = FigureCanvas(self.fig)
         self.canvas.set_size_request(250, 380)
-        #self.sw = Gtk.ScrolledWindow()
-        #self.sw.add_with_viewport(self.canvas)
-        #statistics_box.pack_start(self.canvas, True, True, 0)
         hbox.pack_start(self.canvas, True, True, 0)
 
         self.select_fr_button = Gtk.Button("Choose FR File")
