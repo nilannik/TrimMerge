@@ -1,6 +1,6 @@
 from __future__ import division, print_function
 
-from os import pardir
+from os import pardir, remove
 from os.path import join, dirname, basename, realpath, splitext
 
 try:
@@ -17,7 +17,7 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
 
 from TrimMergeUI.Worker import count_length, compare_reads, init_trim_worker, clean_reads
-
+from TrimMergeUI.utils import batch_iterator
 from multiprocessing import Pool
 
 
@@ -163,6 +163,9 @@ class TrimPage(Gtk.Box):
         self.show_all()
         self.lock_label.hide()
 
+        self.temp_files_FR = []
+        self.temp_files_RF = []
+
     def on_file_clicked(self, widget):
         dialog = Gtk.FileChooserDialog("Please choose a file", self.get_toplevel(),
                                        Gtk.FileChooserAction.OPEN,
@@ -301,7 +304,8 @@ class TrimPage(Gtk.Box):
         elif self.alphabet == "Extended DNA":
             self.alphabet = IUPAC.extended_dna
 
-        response, max_count = self.count_records()
+        print('Partitioning files')
+        response, max_count = self.partition_files()
         if not response:
             self.run_button.set_active(False)
             return
@@ -330,67 +334,103 @@ class TrimPage(Gtk.Box):
         SeqIO.write(short_FR, file_out_FR_short, self.file_format)
         SeqIO.write(short_RF, file_out_RF_short, self.file_format)
 
+        print('Removing temp files')
+        self.delete_temp_files()
+
         self.run_button.set_active(False)
         self.status_label.set_text('Idle')
 
-    def count_records(self):
-        self.status_label.set_text('Reading in sequences...')
+    def delete_temp_files(self):
+        for file_descriptor in self.temp_files_FR + self.temp_files_RF:
+            remove(file_descriptor['file_name'])
+        self.temp_files_FR = []
+        self.temp_files_RF = []
+
+    def partition_files(self):
+        self.status_label.set_text('Partitioning files...')
+        chunk_size = 250
         records_FR = SeqIO.parse(self.fr_file_name, self.file_format, alphabet=self.alphabet)
         records_RF = SeqIO.parse(self.rf_file_name, self.file_format, alphabet=self.alphabet)
-
-        pool = Pool()
-        len_fr_iter = pool.imap(count_length, records_FR, chunksize=100)
-        len_rf_iter = pool.imap(count_length, records_RF, chunksize=100)
-        fr_done = False
-        rf_done = False
-        max_count_fr = 0
-        max_count_rf = 0
+        records_FR_iterator = batch_iterator(records_FR, chunk_size)
+        records_RF_iterator = batch_iterator(records_RF, chunk_size)
+        prefix_FR, extension_FR = splitext(basename(self.fr_file_name))
+        prefix_RF, extension_RF = splitext(basename(self.rf_file_name))
+        count_FR_files = 0
+        count_RF_files = 0
+        count_FR = 0
+        count_RF = 0
         len_fr = 0
         len_rf = 0
+        fr_done = False
+        rf_done = False
         while not (fr_done and rf_done):
             while Gtk.events_pending():
                 Gtk.main_iteration()
             try:
-                len_fr += next(len_fr_iter)
-                max_count_fr +=1
+                batch, len_fr_batch = next(records_FR_iterator)
+                file_name = join(self.output_dir_name, prefix_FR + "_%04i" % (count_FR_files + 1) + extension_FR)
+                self.temp_files_FR.append({
+                    'file_name': file_name,
+                    'format': self.file_format,
+                    'alphabet': self.alphabet,
+                    'out_dir': self.output_dir_name
+                })
+                with open(file_name, "w") as handle:
+                    count = SeqIO.write(batch, handle, self.file_format)
+                print("Wrote %i records to %s" % (count, file_name))
+                count_FR_files += 1
+                count_FR += len(batch)
+                len_fr += len_fr_batch
             except StopIteration:
                 fr_done = True
                 pass
             try:
-                len_rf += next(len_rf_iter)
-                max_count_rf +=1
+                batch, len_rf_batch = next(records_RF_iterator)
+                file_name = join(self.output_dir_name, prefix_RF + "_%04i" % (count_RF_files + 1) + extension_RF)
+                self.temp_files_RF.append({
+                    'file_name': file_name,
+                    'format': self.file_format,
+                    'alphabet': self.alphabet,
+                    'out_dir': self.output_dir_name
+                })
+                with open(file_name, "w") as handle:
+                    count = SeqIO.write(batch, handle, self.file_format)
+                print("Wrote %i records to %s" % (count, file_name))
+                count_RF_files += 1
+                count_RF += len(batch)
+                len_rf += len_rf_batch
             except StopIteration:
                 rf_done = True
                 pass
-            self.total_number_of_reads.set_text('%d' % max_count_fr)
+            self.total_number_of_reads.set_text('%d' % count_FR)
             self.total_length_of_reads_count = len_fr + len_rf
             self.total_length_of_reads.set_text('%g' % self.total_length_of_reads_count)
-        if max_count_fr != max_count_rf:
+        print('Split FR and RF into %d and %d parts' % (len(self.temp_files_FR), len(self.temp_files_RF)))
+        if count_FR != count_RF:
             dialog = Gtk.MessageDialog(self.get_toplevel(), 0, Gtk.MessageType.ERROR,
                                        Gtk.ButtonsType.CANCEL, "Different length of FR and RF files")
-            dialog.format_secondary_text(
-                "Number of forward and reverse reads must match")
+            dialog.format_secondary_text("Number of forward and reverse reads must match")
             dialog.run()
             dialog.destroy()
             result = False, 0
-        result = True
-        self.status_label = Gtk.Label('Idle')
-        return result, max_count_fr
+        else:
+            result = True, count_FR
+        return result
 
     def compare_records(self):
         self.status_label.set_text('Checking sequences...')
-        records_FR = SeqIO.parse(self.fr_file_name, self.file_format, alphabet=self.alphabet)
-        records_RF = SeqIO.parse(self.rf_file_name, self.file_format, alphabet=self.alphabet)
 
+        print('Creating pool')
         pool = Pool()
-        len_fr_iter = pool.imap(compare_reads, zip(records_FR, records_RF), chunksize=100)
+        print('Run FR-RF comparison')
+        cmp_iter = pool.imap(compare_reads, list(zip(self.temp_files_FR, self.temp_files_RF)))
         cmp_done = False
         result = True
         while not cmp_done:
             while Gtk.events_pending():
                 Gtk.main_iteration()
             try:
-                result = next(len_fr_iter)
+                result = next(cmp_iter)
                 if not result:
                     pool.terminate()
                     break
@@ -405,19 +445,20 @@ class TrimPage(Gtk.Box):
                 "IDs of PE reads must match")
             dialog.run()
             dialog.destroy()
+        print('Closing pool')
+        pool.close()
+        pool.join()
         self.status_label = Gtk.Label('Idle')
         return result
 
     def clean_PE_reads(self, max_count=1e10):
         self.status_label.set_text('Scanning for adapters...')
-        records_FR = SeqIO.parse(self.fr_file_name, self.file_format, alphabet=self.alphabet)
-        records_RF = SeqIO.parse(self.rf_file_name, self.file_format, alphabet=self.alphabet)
         short_read_threshold = self.adapter_min_length
-
+        print('Creating pool')
         pool = Pool(initializer=init_trim_worker, initargs=(self.adapters_dict, self.adapter_min_length,
                                                             self.adapter_similarity,
                                                             short_read_threshold))
-        results = pool.imap(clean_reads, zip(records_FR, records_RF), chunksize=1000)
+        results = pool.imap(clean_reads, list(zip(self.temp_files_FR, self.temp_files_RF)))
 
         clean_FR = []
         clean_RF = []
@@ -432,6 +473,7 @@ class TrimPage(Gtk.Box):
         count_good = 0
         good_fr_len = 0
         good_rf_len = 0
+        good_total_len = 0
         count_bad = 0
         count_short = 0
         count_adapters_fr = 0
@@ -450,45 +492,45 @@ class TrimPage(Gtk.Box):
             while Gtk.events_pending():
                 Gtk.main_iteration()
             try:
-                clean_FR_rec, clean_RF_rec, bad_FR_rec, bad_RF_rec, \
-                short_FR_rec, short_RF_rec, adapters_count, max_sim = next(results)
-                count += 1
+                clean_FR_i, clean_RF_i, bad_FR_i, bad_RF_i, short_FR_i, short_RF_i, num_found_i, max_similarity_i, \
+                count_i, count_clean_i, count_bad_i, count_short_i, \
+                clean_fr_len_i, clean_rf_len_i, clean_total_len_i = next(results)
+                count += count_i
                 self.progressbar.set_fraction(count / max_count)
 
-                count_adapters_fr += adapters_count[0]
-                count_adapters_rf += adapters_count[1]
+                count_adapters_fr += num_found_i[0]
+                count_adapters_rf += num_found_i[1]
+                max_similarity_fr += max_similarity_i[0]
+                max_similarity_rf += max_similarity_i[1]
                 self.total_number_of_reads_with_adapters.set_text(
                     '%2.5g / %2.5g' % (count_adapters_fr, count_adapters_rf))
-                if adapters_count[0] > max_adapters_per_read_fr:
-                    max_adapters_per_read_fr = adapters_count[0]
-                if adapters_count[1] > max_adapters_per_read_rf:
-                    max_adapters_per_read_rf = adapters_count[1]
+                if num_found_i[0] > max_adapters_per_read_fr:
+                    max_adapters_per_read_fr = num_found_i[0]
+                if num_found_i[1] > max_adapters_per_read_rf:
+                    max_adapters_per_read_rf = num_found_i[1]
                 self.max_number_of_adapters.set_text('%d, %d' % (max_adapters_per_read_fr, max_adapters_per_read_rf))
-                if clean_FR_rec:
-                    clean_FR.append(clean_FR_rec)
-                    count_good += 1
-                    self.total_number_of_reads_out.set_text('%d (%2.2f %%)' % (count_good, count_good / count * 100))
-                    good_fr_len += len(clean_FR_rec.seq)
-                if clean_RF_rec:
-                    clean_RF.append(clean_RF_rec)
-                    good_rf_len += len(clean_RF_rec.seq)
-                    good_total_len = good_fr_len + good_rf_len
-                    self.total_length_of_reads_out.set_text('%2.5g (%2.2f %%)' % (good_total_len,
-                                                                                  good_total_len / self.total_length_of_reads_count * 100))
-                if bad_FR_rec:
-                    count_bad += 1
-                    self.total_number_of_suspicious.set_text('%d (%2.2f %%)' % (count_bad, count_bad / count * 100))
-                    bad_FR.append(bad_FR_rec)
-                if bad_RF_rec:
-                    bad_RF.append(bad_RF_rec)
-                if short_FR_rec:
-                    count_short += 1
-                    self.total_number_of_short.set_text('%d (%2.2f %%)' % (count_short, count_short / count * 100))
-                    short_FR.append(short_FR_rec)
-                if short_RF_rec:
-                    short_RF.append(short_RF_rec)
+                clean_FR += clean_FR_i
+                count_good += count_clean_i
+                self.total_number_of_reads_out.set_text('%d (%2.2f %%)' % (count_good, count_good / count * 100))
+                good_fr_len += clean_fr_len_i
+                clean_RF += clean_RF_i
+                good_rf_len += clean_rf_len_i
+                good_total_len += clean_total_len_i
+                self.total_length_of_reads_out.set_text(
+                    '%2.5g (%2.2f %%)' % (good_total_len, good_total_len / self.total_length_of_reads_count * 100))
+                count_bad += count_bad_i
+                self.total_number_of_suspicious.set_text('%d (%2.2f %%)' % (count_bad, count_bad / count * 100))
+                bad_FR += bad_FR_i
+                bad_RF += bad_RF_i
+                count_short += count_short_i
+                self.total_number_of_short.set_text('%d (%2.2f %%)' % (count_short, count_short / count * 100))
+                short_FR += short_FR_i
+                short_RF += short_RF_i
             except StopIteration:
                 working = False
                 pass
-
+        print('Closing pool')
+        pool.close()
+        pool.join()
+        self.status_label = Gtk.Label('Idle')
         return clean_FR, clean_RF, bad_FR, bad_RF, short_FR, short_RF
