@@ -9,8 +9,7 @@ from Bio import SeqIO
 
 from TrimMergeUI.utils import clean_records, find_overlaps, batch_iterator
 
-from os import pardir
-from os.path import join, dirname, basename, realpath, splitext
+from os.path import join, basename, splitext
 
 
 def count_length(parameters):

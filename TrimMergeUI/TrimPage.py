@@ -115,7 +115,7 @@ class TrimPage(Gtk.Box):
         self.adapter_min_length_button.set_adjustment(adjustment)
         self.adapter_min_length_button.set_numeric(True)
         self.adapter_min_length_button.set_update_policy(Gtk.SpinButtonUpdatePolicy.IF_VALID)
-        self.adapter_min_length_button.connect("changed", self.on_adapter_min_length_changed)
+        self.adapter_min_length_button.connect("value-changed", self.on_adapter_min_length_changed)
         self.adapter_min_length_button.set_value(self.adapter_min_length)
 
         self.adapter_similarity = 60
@@ -124,7 +124,7 @@ class TrimPage(Gtk.Box):
         self.adapter_similarity_button.set_adjustment(adjustment)
         self.adapter_similarity_button.set_numeric(True)
         self.adapter_similarity_button.set_update_policy(Gtk.SpinButtonUpdatePolicy.IF_VALID)
-        self.adapter_similarity_button.connect("changed", self.on_adapter_similarity_changed)
+        self.adapter_similarity_button.connect("value-changed", self.on_adapter_similarity_changed)
         self.adapter_similarity_button.set_value(self.adapter_similarity)
 
         self.run_button = Gtk.ToggleButton("Run")
