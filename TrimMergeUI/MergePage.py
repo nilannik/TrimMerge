@@ -116,7 +116,7 @@ class MergePage(Gtk.Box):
         self.overlap_min_length_button.set_adjustment(adjustment)
         self.overlap_min_length_button.set_numeric(True)
         self.overlap_min_length_button.set_update_policy(Gtk.SpinButtonUpdatePolicy.IF_VALID)
-        self.overlap_min_length_button.connect("changed", self.on_overlap_min_length_changed)
+        self.overlap_min_length_button.connect("value-changed", self.on_overlap_min_length_changed)
         self.overlap_min_length_button.set_value(self.overlap_min_length)
 
         self.overlap_similarity = 60
@@ -125,7 +125,7 @@ class MergePage(Gtk.Box):
         self.overlap_similarity_button.set_adjustment(adjustment)
         self.overlap_similarity_button.set_numeric(True)
         self.overlap_similarity_button.set_update_policy(Gtk.SpinButtonUpdatePolicy.IF_VALID)
-        self.overlap_similarity_button.connect("changed", self.on_overlap_similarity_changed)
+        self.overlap_similarity_button.connect("value-changed", self.on_overlap_similarity_changed)
         self.overlap_similarity_button.set_value(self.overlap_similarity)
 
         self.run_button = Gtk.ToggleButton("Run")
