@@ -51,12 +51,18 @@ def compare_reads(parameters):
         if not record_FR.id == record_RF.id:
             print('ID mismatch:', records_FR.id, record_RF.id)
             return False
-        if not record_FR.name == record_RF.name:
-            print('Name mismatch:', records_FR.name, record_RF.name)
-            return False
-        if not record_FR.description == record_RF.description:
-            print('Description mismatch:', records_FR.description, record_RF.description)
-            return False
+        try:
+            if not record_FR.name == record_RF.name:
+                print('Name mismatch:', records_FR.name, record_RF.name)
+                return False
+        except AttributeError:
+            pass
+        try:
+            if not record_FR.description == record_RF.description:
+                print('Description mismatch:', records_FR.description, record_RF.description)
+                return False
+        except AttributeError:
+            pass
     return True
 
 
